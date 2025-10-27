@@ -1,0 +1,4 @@
+enum Alignment{
+  horizontal,
+  vertical;
+}
