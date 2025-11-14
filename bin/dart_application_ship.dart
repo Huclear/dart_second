@@ -1,14 +1,48 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
-import 'package:dart_application_ship/alignment.dart';
-import 'package:dart_application_ship/field.dart';
-import 'package:dart_application_ship/point.dart';
+import '../lib/alignment.dart';
+import '../lib/field.dart';
+import '../lib/point.dart';
+import '../lib/result.dart';
 
 const String BOT_NAME = "BOT";
-void main(List<String> arguments) {
+Future<void> main(List<String> arguments) async {
+  Isolate? mainIsolate = null;
+  ReceivePort receiveResultsPort = ReceivePort();
+  SendPort? sendResultsPort = null;
+  receiveResultsPort.listen((message) async {
+    if (message is SendPort)
+      sendResultsPort = message;
+    else if (message is Map<String, Result>) {
+      mainIsolate?.kill(priority: Isolate.immediate);
+      clearConsole();
+
+      for (var element in message.entries) {
+        await element.value.readResultsData("C:\\Users\\Kombucha\\Desktop\\testDrive");
+        await element.value.saveResult("C:\\Users\\Kombucha\\Desktop\\testDrive");
+        print("\n\t" + element.toString());
+      }
+      exit(0);
+    }
+  });
+  Isolate.spawn(startResultsIsolate, receiveResultsPort.sendPort);
+
+  ReceivePort mainReceiver = ReceivePort();
+  mainIsolate = await Isolate.spawn(processGame, mainReceiver.sendPort);
+  mainReceiver.listen((message) {
+    if (message is Map<String, Field>) sendResultsPort?.send(message);
+  });
+}
+
+void processGame(SendPort port) async {
   bool playWithBot = true;
+  bool randomizePlayerField = false;
   int fieldSize = 10;
   Map<String, Field> playerFields = {};
+  Future<Field>? field1Generation;
+  Future<Field>? field2Generation;
 
   //select field size
   print(
@@ -33,10 +67,34 @@ void main(List<String> arguments) {
     print(
       "\nWell, enjoy playing with the bot, not knowing basic combinations to win.",
     );
-    playWithBot = true;
   } else {
     print("\nWell, enjoy this console sheet, i guess.");
+    playWithBot = false;
   }
+
+  //asking if needs random generation
+  print(
+    "\nNow, you`re about to fill your field with ships. Would you rather place the ships by yourself than allow us randomly generate them. (yes|no)? #Asking both players and applied to both players",
+  );
+  var randomize = stdin.readLineSync();
+  if (randomize == null || randomize.toLowerCase() == "yes") {
+    print("\nWell, enjoy the random field we`ve generated right fir you.");
+  } else {
+    print("\nWell, enjoy this console sheet, i guess.");
+    randomizePlayerField = true;
+  }
+
+  //generating fields
+  field1Generation = randomizePlayerField
+      ? Isolate.run(() async {
+          return randomizeField(fieldSize);
+        })
+      : null;
+  field2Generation = randomizePlayerField || playWithBot
+      ? Isolate.run(() async {
+          return randomizeField(fieldSize);
+        })
+      : null;
 
   //inputing names for players
   print("\nFor now i need the name for \"Player 1\": ");
@@ -45,26 +103,33 @@ void main(List<String> arguments) {
   if (!playWithBot) {
     print("\nFor now i need the name for \"Player 2\": ");
     name2 = stdin.readLineSync() ?? "Player 2";
+    while (name2 == name1) {
+      print(
+        "That name has already been taken!!! \nFor now i need the name for \"Player 2\": ",
+      );
+      name2 = stdin.readLineSync() ?? "Player 2";
+    }
   }
 
-  //generating fields
-  playerFields.addAll({name1: initializeField(fieldSize)});
-  if (
-    playWithBot) {
-    playerFields.addAll({name2: randomizeField(fieldSize)});
-  } else {
+  //generating field for player 1
+  if (field1Generation == null)
+    playerFields.addAll({name1: initializeField(fieldSize)});
+  else
+    playerFields.addAll({name1: (await field1Generation)});
+
+  //generating field for player 2
+  if (field2Generation == null)
     playerFields.addAll({name2: initializeField(fieldSize)});
-  }
+  else
+    playerFields.addAll({name2: (await field2Generation)});
 
   //the fight
-  while (!playerFields.entries.any(
-    (keyValue) => !keyValue.value.hasAliveShips(),
-  )) {
+  while (true) {
     //showing player 1 fields in compare
     clearConsole();
     print(playerFields.entries.first.key);
     printField(playerFields.entries.first.value, false);
-    printField(playerFields.entries.last.value, true);
+    printField(playerFields.entries.last.value, false);
 
     //reading hit point
     var hitPoint = requirePointInput();
@@ -75,7 +140,7 @@ void main(List<String> arguments) {
     while (hadHit == null || hadHit) {
       clearConsole();
       printField(playerFields.entries.first.value, false);
-      printField(playerFields.entries.last.value, true);
+      printField(playerFields.entries.last.value, false);
       hitPoint = requirePointInput();
       hadHit = playerFields.entries.last.value.tryHitShip(
         hitPoint.xAxis,
@@ -92,14 +157,14 @@ void main(List<String> arguments) {
 
       //reading hit point
       hitPoint = requirePointInput();
-      var hadHit = playerFields.entries.last.value.tryHitShip(
+      var hadHit = playerFields.entries.first.value.tryHitShip(
         hitPoint.xAxis,
         hitPoint.yAxis,
       );
       while (hadHit == null || hadHit) {
         clearConsole();
-        printField(playerFields.entries.first.value, false);
-        printField(playerFields.entries.last.value, true);
+        printField(playerFields.entries.last.value, false);
+        printField(playerFields.entries.first.value, true);
         hitPoint = requirePointInput();
         hadHit = playerFields.entries.first.value.tryHitShip(
           hitPoint.xAxis,
@@ -128,18 +193,8 @@ void main(List<String> arguments) {
         );
       }
     }
+    port.send(playerFields);
   }
-
-  //selecting player won
-  var playerWon =
-      playerFields.entries
-          .where((keyValue) => keyValue.value.hasAliveShips())
-          .firstOrNull
-          ?.key ??
-      "Unknown";
-
-  clearConsole();
-  print("Player $playerWon has won");
 }
 
 Point requirePointInput() {
@@ -340,4 +395,34 @@ void printField(Field playerField, bool hideShips) {
     }
   }
   stdout.writeln();
+}
+
+void startResultsIsolate(SendPort port) {
+  final receivePort = ReceivePort();
+  port.send(receivePort.sendPort);
+
+  receivePort.listen((message) {
+    try {
+      if (message is Map<String, Field> &&
+          message.entries.any((f) {
+            return !f.value.hasAliveShips();
+          })) {
+        var playersRes = message.map((key, value) {
+          var res = Result(key);
+          if (value.hasAliveShips()) {
+            res.increaseSuccessCount(1);
+          } else {
+            res.increaseFailureCountCount(1);
+          }
+
+          return MapEntry(key, res);
+        });
+        port.send(playersRes);
+      } else {
+        port.send(null);
+      }
+    } catch (e) {
+      port.send(e.toString());
+    }
+  });
 }

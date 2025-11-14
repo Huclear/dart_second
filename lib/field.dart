@@ -1,6 +1,6 @@
-import 'package:dart_application_ship/alignment.dart';
-import 'package:dart_application_ship/point.dart';
-import 'package:dart_application_ship/ship.dart';
+import 'alignment.dart';
+import 'point.dart';
+import 'ship.dart';
 
 class Field {
   final List<Point> __hitPoints = List.empty(growable: true);

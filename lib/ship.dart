@@ -1,4 +1,4 @@
-import 'package:dart_application_ship/alignment.dart';
+import 'alignment.dart';
 
 class Ship {
   final String name;
